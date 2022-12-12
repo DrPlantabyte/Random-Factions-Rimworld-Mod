@@ -3,25 +3,25 @@ using RandomFactions.filters;
 using RimWorld;
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
 using Verse;
 
 public class RandomFactionGenerator
 {
 	private System.Random prng;
 	private RimWorld.Planet.World world;
-	private List<RimWorld.FactionDef> definedFactionDefs = new List<RimWorld.FactionDef>();
     private bool hasRoyalty = false;
     private bool hasIdeology = false;
     private bool hasBiotech = false;
-    //private RandFacDataStore dataStore;
+    private RandFacDataStore dataStore;
 
     HugsLib.Utils.ModLogger Logger;
-    public RandomFactionGenerator(RimWorld.Planet.World world, IEnumerable<FactionDef> allFactionDefs, bool hasRoyaltyExpansion, bool hasIdeologyExpansion, bool hasBiotechExpansion,  HugsLib.Utils.ModLogger logger)
+    public RandomFactionGenerator(RandFacDataStore dataStore, RimWorld.Planet.World world, bool hasRoyaltyExpansion, bool hasIdeologyExpansion, bool hasBiotechExpansion,  HugsLib.Utils.ModLogger logger)
 	{
 		// init globals
 		this.Logger = logger;
 		this.world = world;
-        //this.dataStore = dataStore;
+        this.dataStore = dataStore;
         this.hasBiotech = hasBiotechExpansion;
         this.hasRoyalty = hasRoyaltyExpansion;
         this.hasIdeology= hasIdeologyExpansion;
@@ -30,11 +30,7 @@ public class RandomFactionGenerator
 		seeder.NextBytes(seed_buffer);
 		int seed = BitConverter.ToInt32(seed_buffer, 0);
 		this.prng = new System.Random(seed);
-		// load existing faction definitions
-		foreach (var def in allFactionDefs) {
-            if (def.categoryTag.EqualsIgnoreCase(RandomFactionsMod.RANDOM_CATEGORY_NAME)) { continue; } // skip factions from this mod
-            this.definedFactionDefs.Add(def); 
-        }
+		// faction definitions handled by data store class
         logger.Trace(string.Format("RandomFactionGenerator constructed with random number seed {0}", world.ConstantRandSeed));
     }
 
@@ -102,7 +98,7 @@ public class RandomFactionGenerator
     private RimWorld.FactionDef drawRandomFactionDef(List<RimWorld.FactionDef> fdefList, IEnumerable<RimWorld.Faction> existingFactions)
     {
         FactionDef fdef = null;
-        int retyLimit = 100;
+        int retyLimit = 32;
         while (--retyLimit > 0)
         {
             fdef = fdefList[this.prng.Next(fdefList.Count)];
@@ -112,13 +108,18 @@ public class RandomFactionGenerator
                 break;
             }
         }
+        if ((fdef.xenotypeSet == null || fdef.BaselinerChance > 0.65f) && this.prng.Next(100) < this.dataStore.xenotypePercent)
+        {
+            fdef = this.dataStore.patchXenotype(fdef);
+        }
         return fdef;
     }
 
     public Faction randomNPCFaction(IEnumerable<RimWorld.Faction> existingFactions)
 	{
-        var fdefList = FactionDefFilter.filterFactionDefs(this.definedFactionDefs, 
-            new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false)
+        var fdefList = FactionDefFilter.filterFactionDefs(this.dataStore.getFactionDefs(), 
+            new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false),
+            new CategoryTagFactionDefFilter(RandomFactionsMod.RANDOM_CATEGORY_NAME, true)
             );
         var fdef = drawRandomFactionDef(fdefList, existingFactions);
         return generateFactionFromDef(fdef, existingFactions);
@@ -126,8 +127,9 @@ public class RandomFactionGenerator
 
     public Faction randomEnemyFaction(IEnumerable<RimWorld.Faction> existingFactions)
     {
-        var fdefList = FactionDefFilter.filterFactionDefs(this.definedFactionDefs,
-            new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false), 
+        var fdefList = FactionDefFilter.filterFactionDefs(this.dataStore.getFactionDefs(),
+            new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false),
+            new CategoryTagFactionDefFilter(RandomFactionsMod.RANDOM_CATEGORY_NAME, true), 
             new PermanentEnemyFactionDefFilter(true)
             );
         var fdef = drawRandomFactionDef(fdefList, existingFactions);
@@ -136,8 +138,9 @@ public class RandomFactionGenerator
 
     public Faction randomRoughFaction(IEnumerable<RimWorld.Faction> existingFactions)
     {
-        var fdefList = FactionDefFilter.filterFactionDefs(this.definedFactionDefs,
+        var fdefList = FactionDefFilter.filterFactionDefs(this.dataStore.getFactionDefs(),
             new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false),
+            new CategoryTagFactionDefFilter(RandomFactionsMod.RANDOM_CATEGORY_NAME, true),
             new PermanentEnemyFactionDefFilter(false), new NaturalEnemyFactionDefFilter(true)
             );
         var fdef = drawRandomFactionDef(fdefList, existingFactions);
@@ -146,7 +149,7 @@ public class RandomFactionGenerator
 
     public Faction randomNeutralFaction(IEnumerable<RimWorld.Faction> existingFactions)
     {
-        var fdefList = FactionDefFilter.filterFactionDefs(this.definedFactionDefs,
+        var fdefList = FactionDefFilter.filterFactionDefs(this.dataStore.getFactionDefs(),
             new PlayerFactionDefFilter(false), new HiddenFactionDefFilter(false),
             new PermanentEnemyFactionDefFilter(false), new NaturalEnemyFactionDefFilter(false)
             );

@@ -6,14 +6,24 @@ namespace RandomFactions.filters
     public class CategoryTagFactionFilter : FactionFilter
     {
         private string tag; // eg "Outlander"
-        public CategoryTagFactionFilter(string tag)
+        private bool exclude;
+        public CategoryTagFactionFilter(string tag, bool exclude)
         {
             this.tag = tag;
+            this.exclude = exclude;
         }
 
         public override bool Matches(Faction f)
         {
-            return f.def.categoryTag.EqualsIgnoreCase(this.tag);
+            bool is_category = this.tag.EqualsIgnoreCase(f.def.categoryTag);
+            if (this.exclude)
+            {
+                return !is_category;
+            }
+            else
+            {
+                return is_category;
+            }
         }
     }
 }

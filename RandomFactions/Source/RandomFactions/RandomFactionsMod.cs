@@ -1,4 +1,5 @@
 ﻿using HugsLib.Logs;
+using HugsLib.Settings;
 using HugsLib.Utils;
 using RimWorld;
 using RimWorld.Planet;
@@ -13,6 +14,10 @@ namespace RandomFactions
     public class RandomFactionsMod : HugsLib.ModBase
     {
         public static string RANDOM_CATEGORY_NAME = "Random";
+
+        private SettingHandle<int> xenoPercentHandle;
+        private List<FactionDef> defaultFactions = null;
+
         public RandomFactionsMod() {
             // constructor (invoked by reflection, do not add parameters)
             Logger.Trace("RandomFactions constructed");
@@ -85,6 +90,12 @@ Called after all Defs are loaded.
 This happens when game loading has completed, after Initialize is called. This is a good time to inject any Random defs. Make sure you call HugsLib.InjectedDefHasher.GiveShortHasToDef on any defs you manually instantiate to avoid def collisions (it's a vanilla thing).
 Since A17 it no longer matters where you initialize your settings handles, since the game automatically restarts both when the mod configuration or the language changes. This means that both Initialize and DefsLoaded are only ever called once per ModBase instance.*/
             base.DefsLoaded();
+
+            // add mod options
+            this.xenoPercentHandle = Settings.GetHandle<int>("PercentXenotype", "% Xenotype Fequency", "If Biotech DLC is detected, then random factions will substitute baseliners for xenotypes this percent of the time (default 20%)", 20, Validators.IntRangeValidator(0, 100));
+            xenoPercentHandle.ValueChanged += handle => {
+                //Logger.Message("Xenotype changed to " + xenoPercentHandle.Value);
+            };
         }
 
         public override void Update()
@@ -126,6 +137,22 @@ Called after a Unity scene change. Receives a UnityEngine.SceneManagement.Scene 
 There are two scenes in Rimworld- Entry and Play, which stand for the menu, and the game itself. Use Verse.GenScene to check which scene has been loaded.
 Note, that not everything may be initialized after the scene change, and the game may be in the middle of map loading or generation.*/
             base.SceneLoaded(scene);
+            //Logger.Trace(string.Format("Scene change: play scene == {0}, entry scene == {1}", Verse.GenScene.InPlayScene, Verse.GenScene.InEntryScene));
+            if (Verse.GenScene.InEntryScene) resetFactionDefs();
+        }
+
+        private void resetFactionDefs()
+        {
+            if (defaultFactions != null)
+            {
+                // undo the mess created by RandFacDataStore
+                DefDatabase<FactionDef>.Clear();
+                foreach(var def in defaultFactions)
+                {
+                    DefDatabase<FactionDef>.Add(def);
+                }
+            }
+            defaultFactions = null;
         }
 
         public override void WorldLoaded()
@@ -139,26 +166,51 @@ This is only called after the game has started, not on the "select landing spot"
             base.WorldLoaded();
             Logger.Message("World loaded! Applying Random generation rules to factions...");
             var world = Find.World;
+            this.defaultFactions = new List<FactionDef>();
             string facdef_list = "";
             foreach(var fdef in DefDatabase<FactionDef>.AllDefs)
             {
-                if(facdef_list.Length > 0) { facdef_list += ", "; }
+                this.defaultFactions.Add(fdef);
+                if (facdef_list.Length > 0) { facdef_list += ", "; }
                 facdef_list += fdef.defName;
             }
             Logger.Trace(string.Format("Found {0} faction definitions: {1}", DefDatabase<FactionDef>.DefCount, facdef_list));
-            var hasRoyalty = false;
-            var hasIdeology = false;
-            var hasBiotech = false;
-            foreach (var m in Verse.ModLister.AllInstalledMods)
+            string xenodef_list = "";
+            foreach (var xdef in DefDatabase<XenotypeDef>.AllDefs)
             {
-                if (m.PackageId.EqualsIgnoreCase("ludeon.rimWorld.royalty")) { hasRoyalty = true; }
-                if (m.PackageId.EqualsIgnoreCase("ludeon.rimWorld.ideology")) { hasIdeology = true; }
-                if (m.PackageId.EqualsIgnoreCase("ludeon.rimWorld.biotech")) { hasBiotech = true; }
-                //Logger.Warning(string.Format("Found mod: {0} ({1}, IsCoreMod={2}, Expansion={3}, Active={4})", m.Name, m.PackageId, m.IsCoreMod, m.Expansion, m.Active));
+                if (xenodef_list.Length > 0) { xenodef_list += ", "; }
+                xenodef_list += xdef.defName;
             }
+            Logger.Trace(string.Format("Found {0} xenotype definitions: {1}", DefDatabase<XenotypeDef>.DefCount, xenodef_list));
+            var hasRoyalty = ModsConfig.RoyaltyActive;
+            var hasIdeology = ModsConfig.IdeologyActive;
+            var hasBiotech = ModsConfig.BiotechActive;
             // load save data store (if it exists)
-            //var dataSore = Find.World.GetComponent<RandFacDataStore>();
-            RandomFactionGenerator fgen = new RandomFactionGenerator(world, DefDatabase<FactionDef>.AllDefs, hasRoyalty, hasIdeology, hasBiotech, Logger);
+            Logger.Trace("fetching data store...");
+            var wcomp = world.GetComponent(typeof(RandFacDataStore));
+            RandFacDataStore dataStore;
+            if (wcomp == null )
+            {
+                Logger.Trace("data store is null, initializing new one...");
+                dataStore = new RandFacDataStore(world);
+                Logger.Trace("adding data store to world...");
+                world.components.Add(dataStore);
+            } else
+            {
+                dataStore = (RandFacDataStore)wcomp;
+                Logger.Trace("...data store loaded");
+            }
+            dataStore.Logger = Logger;
+            if (hasBiotech)
+            {
+                dataStore.xenotypePercent = this.xenoPercentHandle.Value;
+            } else
+            {
+                dataStore.xenotypePercent = 0;
+            }
+            Logger.Trace("synchronizing defs...");
+            dataStore.synchronizeFactionDefs();
+            RandomFactionGenerator fgen = new RandomFactionGenerator(dataStore, world, hasRoyalty, hasIdeology, hasBiotech, Logger);
             var allFactionList = new List<Faction>();
             var replaceList = new List<Faction>();
             foreach (var fac in Find.FactionManager.AllFactions) { allFactionList.Add(fac); }
